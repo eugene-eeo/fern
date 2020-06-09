@@ -8,6 +8,6 @@ box = Box(PrivateKey.generate(),
 conn = io.BytesIO()
 rpc = RPCStream(BoxStream(box, conn))
 
-rpc.send({"content": 1}, request_id=20)
+rpc.send({"content": "你好 world"}, request_id=20)
 conn.seek(0)
 print(rpc.next())
