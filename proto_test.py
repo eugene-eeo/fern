@@ -6,8 +6,7 @@ box = Box(PrivateKey.generate(),
           PrivateKey.generate().public_key)
 
 conn = io.BytesIO()
-bs = BoxStream(box, conn)
-rpc = RPCStream(bs)
+rpc = RPCStream(BoxStream(box, conn))
 
 rpc.send({"content": 1}, request_id=20)
 conn.seek(0)

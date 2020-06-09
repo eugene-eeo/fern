@@ -53,10 +53,7 @@ class LocalIdentity(Identity):
 
     @classmethod
     def from_bytes(cls, priv_b64: bytes):
-        return cls(priv=SigningKey(
-            priv_b64,
-            encoder=Base64Encoder,
-        ))
+        return cls(SigningKey(priv_b64, encoder=Base64Encoder))
 
     @classmethod
     def generate(cls):

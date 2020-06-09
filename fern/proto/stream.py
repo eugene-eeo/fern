@@ -41,13 +41,11 @@ ALIVE_FLAG  = 0b10000000  # noqa: E221
 
 
 RPCFrame = namedtuple('RPCFrame', [
-    'alive',
-    'request_id',
-    'data',
-    'is_error',
-    'is_stream',
-    'end_of_stream',
+    'alive', 'request_id', 'data',
+    'is_error', 'is_stream', 'end_of_stream',
 ])
+GOODBYE_FRAME = RPCFrame(alive=False, request_id=None, data=None,
+                         is_error=False, is_stream=False, end_of_stream=False)
 
 
 class RPCStream:
@@ -62,8 +60,7 @@ class RPCStream:
              request_id: int,
              is_error: bool = False,
              is_stream: bool = False,
-             end_of_stream: bool = False,
-             ):
+             end_of_stream: bool = False):
 
         flags = 0
         flags |= ALIVE_FLAG
@@ -80,9 +77,6 @@ class RPCStream:
             len(data).to_bytes(4, byteorder="big") +
             request_id.to_bytes(4, byteorder="big")
         )
-
-        print(len(header))
-
         # header is 9 bytes
         self.conn.write(header + data)
 
@@ -90,12 +84,7 @@ class RPCStream:
         header = self.conn.read(9)
         flags = header[0]
         if not flags & ALIVE_FLAG:
-            return RPCFrame(alive=False,
-                            request_id=None,
-                            data=None,
-                            is_error=False,
-                            is_stream=None,
-                            end_of_stream=None)
+            return GOODBYE_FRAME
 
         length = int.from_bytes(header[1:5], byteorder="big")
         req_id = int.from_bytes(header[5:], byteorder="big")
