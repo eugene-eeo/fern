@@ -10,6 +10,9 @@ class Identity:
     def __init__(self, pub: VerifyKey):
         self.pub = pub
 
+    def __hash__(self):
+        return hash(self.pub)
+
     @classmethod
     def from_id(cls, pub_b64: str):
         if len(pub_b64) != 45 or not pub_b64.startswith('@'):
