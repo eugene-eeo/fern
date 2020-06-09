@@ -13,7 +13,7 @@ class BoxStream:
         n = len(b)
         b = memoryview(b)
         while n > 0:
-            m = min(n, 2**12 - 1)
+            m = min(n, 4096)
             # 2 byte header for length
             self.conn.write(self.box.encrypt(m.to_bytes(2, byteorder='big'))
                             + self.box.encrypt(b[:m]))
@@ -40,10 +40,8 @@ ERROR_FLAG  = 0b00000100  # noqa: E221
 ALIVE_FLAG  = 0b10000000  # noqa: E221
 
 
-RPCFrame = namedtuple('RPCFrame', [
-    'alive', 'request_id', 'data',
-    'is_error', 'is_stream', 'end_of_stream',
-])
+RPCFrame = namedtuple('RPCFrame', ['alive', 'request_id', 'data',
+                                   'is_error', 'is_stream', 'end_of_stream'])
 GOODBYE_FRAME = RPCFrame(alive=False, request_id=None, data=None,
                          is_error=False, is_stream=False, end_of_stream=False)
 
@@ -53,7 +51,7 @@ class RPCStream:
         self.conn = conn
 
     def goodbye(self):
-        self.conn.write((0).to_bytes(8, byteorder="big"))
+        self.conn.write((0).to_bytes(9, byteorder="big"))
 
     def send(self,
              obj: object,
