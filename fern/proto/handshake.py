@@ -24,22 +24,23 @@ async def client_handshake(
     client_priv = PrivateKey.generate()  # Ephemeral PK
 
     # Send eph pubkey
-    await conn.write(client_priv.public_key.encode())  # 32 bytes
+    msg1 = client_priv.public_key.encode()
+    await conn.write(msg1)  # 32 bytes
 
     # Get server pubkey
-    server_pub = PublicKey(await conn.read(32))
+    msg2 = await conn.read(32)
+    server_pub = PublicKey(msg2)
 
     ab = crypto_scalarmult(client_priv.encode(), server_pub.encode())
     aB = crypto_scalarmult(client_priv.encode(), server_id.pub.to_curve25519_public_key().encode())
 
     # Send our ID
-    proof = server_pub.encode() + sha256(ab)
-    sig = client_id.priv.sign(proof).signature
-    msg = SecretBox(sha256(ab + aB)).encrypt(
+    sig = client_id.priv.sign(server_pub.encode() + sha256(ab)).signature
+    msg3 = SecretBox(sha256(ab + aB)).encrypt(
         sig + client_id.pub.encode(),  # 64 + 32
         nonce=bytes(24),
-    ).ciphertext
-    await conn.write(msg)  # 112 bytes
+    )
+    await conn.write(msg3.ciphertext)  # 112 bytes
 
     Ab = crypto_scalarmult(
         client_id.priv.to_curve25519_private_key().encode(),
@@ -47,11 +48,10 @@ async def client_handshake(
     )
 
     sbox = SecretBox(sha256(ab + aB + Ab))
-    server_sig = await conn.read(80)
-    server_sig = sbox.decrypt(server_sig, nonce=bytes(24))
+    msg4 = await conn.read(80)
     server_id.pub.verify(
         smessage=sig + client_id.pub.encode() + sha256(ab),
-        signature=server_sig,
+        signature=sbox.decrypt(msg4, nonce=bytes(24)),
     )
 
     return BoxStream(
@@ -69,18 +69,20 @@ async def server_handshake(
     server_priv = PrivateKey.generate()  # Ephemeral PK
 
     # Recv eph pubkey
-    client_pub = PublicKey(await conn.read(32))
+    msg1 = await conn.read(32)
+    client_pub = PublicKey(msg1)
 
     # Send our eph pubkey
-    await conn.write(server_priv.public_key.encode())  # 32 bytes
+    msg2 = server_priv.public_key.encode()
+    await conn.write(msg2)  # 32 bytes
 
     ab = crypto_scalarmult(server_priv.encode(), client_pub.encode())
     aB = crypto_scalarmult(server_id.priv.to_curve25519_private_key().encode(), client_pub.encode())
 
-    msg = await conn.read(112)
-    msg = SecretBox(sha256(ab + aB)).decrypt(msg, nonce=bytes(24))
-    sig = msg[:64]
-    client_id = Identity(VerifyKey(msg[64:]))
+    msg3 = await conn.read(112)
+    msg3 = SecretBox(sha256(ab + aB)).decrypt(msg3, nonce=bytes(24))
+    sig = msg3[:64]
+    client_id = Identity(VerifyKey(msg3[64:]))
 
     # Verify
     client_id.pub.verify(
@@ -94,11 +96,11 @@ async def server_handshake(
     )
 
     sbox = SecretBox(sha256(ab + aB + Ab))
-    msg = sbox.encrypt(
+    msg4 = sbox.encrypt(
         server_id.priv.sign(sig + client_id.pub.encode() + sha256(ab)).signature,
         nonce=bytes(24),
     )
-    await conn.write(msg.ciphertext)  # 80 bytes
+    await conn.write(msg4.ciphertext)  # 80 bytes
 
     return (
         client_id,

@@ -1,25 +1,13 @@
 import asyncio
-import base64
+import uvloop
 from fern.identity import LocalIdentity
 from fern.proto.handshake import client_handshake, server_handshake
 from fern.proto.stream import RPCStream
+from fern.proto.utils import Connection
 
 
 client_id = LocalIdentity.generate()
 server_id = LocalIdentity.generate()
-
-
-class SockFile:
-    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        self.r = reader
-        self.w = writer
-
-    async def read(self, n):
-        return await self.r.readexactly(n)
-
-    async def write(self, b):
-        self.w.write(b)
-        await self.w.drain()
 
 
 async def client(server_started):
@@ -30,11 +18,8 @@ async def client(server_started):
     box = await client_handshake(
         client_id=client_id,
         server_id=server_id.to_identity(),
-        conn=SockFile(reader, writer),
+        conn=Connection(reader, writer),
     )
-    sn = base64.b64encode(box.send_nonce).decode('ascii')
-    rn = base64.b64encode(box.recv_nonce).decode('ascii')
-    print(f"client: client: {client_id.to_identity()} send_nonce: {sn}, recv_nonce: {rn}")
     rpc = RPCStream(box)
     await rpc.send({"hello": "world"}, 1)
     print(await rpc.next())
@@ -44,11 +29,8 @@ async def server(cond):
     async def handle(reader, writer):
         id, box = await server_handshake(
             server_id=server_id,
-            conn=SockFile(reader, writer),
+            conn=Connection(reader, writer),
         )
-        sn = base64.b64encode(box.send_nonce).decode('ascii')
-        rn = base64.b64encode(box.recv_nonce).decode('ascii')
-        print(f"server: client: {id} send_nonce: {sn}, recv_nonce: {rn}")
         rpc = RPCStream(box)
         await rpc.send({"response": "1"}, 1)
         print(await rpc.next())
@@ -71,4 +53,5 @@ async def main():
 
 
 if __name__ == '__main__':
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     asyncio.run(main())
