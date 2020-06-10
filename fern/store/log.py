@@ -1,21 +1,21 @@
 import json
 import sqlite3
-import base64
 from fern.entry import Entry
-from fern.identity import Identity
 
 
 CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS log (
-    id        CHAR(45) PRIMARY KEY,
-    previous  CHAR(45),
-    sequence  INTEGER NOT NULL,
+    row_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    id        CHAR(45) NOT NULL,
+    prev      CHAR(45),
+    seq       INTEGER NOT NULL,
     timestamp INTEGER NOT NULL,
-    author    CHAR(45),
-    type      VARCHAR,
-    data      BLOB,
-    signature CHAR(88),
-    UNIQUE(author, sequence)
+    author    CHAR(45) NOT NULL,
+    type      VARCHAR NOT NULL,
+    data      BLOB NOT NULL,
+    sig       CHAR(88) NOT NULL,
+    UNIQUE(author, seq),
+    UNIQUE(id)
 )
 """
 
@@ -23,35 +23,31 @@ CREATE TABLE IF NOT EXISTS log (
 class Log:
     def __init__(self, db_path):
         self.db = sqlite3.connect(db_path)
+        self.db.row_factory = sqlite3.Row
         with self.db:
             self.db.execute(CREATE_TABLES)
 
-    def store(self, entry: Entry):
+    def store(self, entries: [Entry]):
         with self.db:
-            self.db.execute(
-                'INSERT INTO log(id,previous,sequence,timestamp,'
-                'author,type,data,signature) VALUES (?,?,?,?,?,?,?,?)', (
+            self.db.executemany(
+                'INSERT INTO log(id,prev,seq,timestamp,author,type,data,sig) '
+                'VALUES (?,?,?,?,?,?,?,?)', [(
                     entry.id,
                     entry.previous,
                     entry.sequence,
                     entry.timestamp,
                     str(entry.author),
                     entry.type,
-                    json.dumps(entry.encode_data()),
+                    json.dumps(Entry.encode_data(entry.data)),
                     entry.signature,
-                ))
+                ) for entry in entries])
 
-    def get_followed_by(self, author: Identity):
+    def get_entries(self, last_row_id: int = 0):
         rows = self.db.execute(
-            'SELECT data, type FROM log '
-            'WHERE log.author = ? AND (log.type = "follow" OR log.type = "unfollow") '
-            'ORDER BY log.sequence',
-            (str(author),))
-        followed = set()
-        for (id, type) in rows:
-            id = base64.b64decode(id)
-            if type == "follow":
-                followed.add(id)
-            else:
-                followed.discard(id)
-        return {Identity.from_id(b.decode('ascii')) for b in followed}
+            'SELECT * FROM log WHERE log.row_id > ?',
+            (last_row_id,),
+        )
+        for row in rows:
+            row = dict(row)
+            row["data"] = json.loads(row["data"])
+            yield row["row_id"], Entry.from_json(row)

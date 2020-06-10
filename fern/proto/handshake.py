@@ -1,72 +1,110 @@
-from nacl.bindings.utils import sodium_memcmp
-from nacl.public import PrivateKey, Box, PublicKey
-from nacl.utils import random
+import nacl.hash
+from nacl.bindings.crypto_scalarmult import crypto_scalarmult
+from nacl.secret import SecretBox
+from nacl.public import PrivateKey, PublicKey
+from nacl.signing import VerifyKey
+from nacl.encoding import RawEncoder
 from fern.identity import Identity, LocalIdentity
+from fern.proto.stream import BoxStream
 
 
 class BadHandshake(Exception):
     pass
 
 
+def sha256(msg):
+    return nacl.hash.sha256(msg, encoder=RawEncoder)
+
+
 def client_handshake(
     client_id: LocalIdentity,
     server_id: Identity,
     conn,  # Conn should have .read and .write
-) -> Box:
+) -> BoxStream:
+    client_priv = PrivateKey.generate()  # Ephemeral PK
 
-    client_pk = PrivateKey.generate()  # ephemeral client-side key
-    nonce = random(size=64)
+    # Send eph pubkey
+    conn.write(client_priv.public_key.encode())  # 32 bytes
 
-    msg = nonce + client_pk.public_key.encode()  # 64 + 32 = 96
-    msg = client_id.priv.sign(msg)
+    # Get server pubkey
+    server_pub = PublicKey(conn.read(32))
 
-    # send ( N_c || P_c || s_c(N_c || P_c) )
-    conn.write(msg)
+    ab = crypto_scalarmult(client_priv.encode(), server_pub.encode())
+    aB = crypto_scalarmult(client_priv.encode(), server_id.pub.to_curve25519_public_key().encode())
 
-    # receive ( N_c || P_s || s_s(N_c || P_s) )
-    res = conn.read(160)  # type: bytes
-    res = server_id.pub.verify(res)
+    # Send our ID
+    proof = server_pub.encode() + sha256(ab)
+    sig = client_id.priv.sign(proof).signature
+    msg = SecretBox(sha256(ab + aB)).encrypt(
+        sig + client_id.pub.encode(),  # 64 + 32
+        nonce=bytes(24),
+    ).ciphertext
+    conn.write(msg)  # 112 bytes
 
-    res_nonce = res[:64]
-    if not sodium_memcmp(nonce, res_nonce):
-        raise BadHandshake
+    Ab = crypto_scalarmult(
+        client_id.priv.to_curve25519_private_key().encode(),
+        server_pub.encode(),
+    )
 
-    server_pubkey = PublicKey(res[64:])
-    box = Box(client_pk, server_pubkey)
+    server_sig = conn.read(80)
+    server_sig = SecretBox(sha256(ab + aB + Ab)).decrypt(server_sig, nonce=bytes(24))
+    server_id.pub.verify(
+        smessage=sig + client_id.pub.encode() + sha256(ab),
+        signature=server_sig,
+    )
 
-    conn.write(box.encrypt(b"box"))
-    txt = conn.read(43)
-    if not sodium_memcmp(box.decrypt(txt), b"box"):
-        raise BadHandshake
-
-    return box
+    return BoxStream(
+        SecretBox(sha256(ab + aB + Ab)),
+        send_nonce=server_pub.encode()[:24],
+        recv_nonce=client_priv.public_key.encode()[:24],
+        conn=conn,
+    )
 
 
 def server_handshake(
     server_id: LocalIdentity,
-    client_id: Identity,
-    conn,
-) -> Box:
+    conn,  # Conn should have .read and .write
+) -> (Identity, BoxStream):
+    server_priv = PrivateKey.generate()  # Ephemeral PK
 
-    server_pk = PrivateKey.generate()
+    # Recv eph pubkey
+    client_pub = PublicKey(conn.read(32))
 
-    # receive ( N_c || P_c || s_c(N_c || P_c) )
-    req = conn.read(160)  # type: bytes
-    req = client_id.pub.verify(req)
+    # Send our eph pubkey
+    conn.write(server_priv.public_key.encode())
 
-    nonce = req[:64]
-    client_pubkey = PublicKey(req[64:])
+    ab = crypto_scalarmult(server_priv.encode(), client_pub.encode())
+    aB = crypto_scalarmult(server_id.priv.to_curve25519_private_key().encode(), client_pub.encode())
 
-    res = nonce + server_pk.public_key.encode()  # 128 + 32 = 160
-    res = server_id.priv.sign(res)
+    msg = conn.read(112)
+    msg = SecretBox(sha256(ab + aB)).decrypt(msg, nonce=bytes(24))
+    sig = msg[:64]
+    client_id = Identity(VerifyKey(msg[64:]))
 
-    # send ( N_c || P_s || s_c(N_c || P_s) )
-    conn.write(res)
-    box = Box(server_pk, client_pubkey)
+    # Verify
+    client_id.pub.verify(
+        smessage=server_priv.public_key.encode() + sha256(ab),
+        signature=sig,
+    )
 
-    conn.write(box.encrypt(b"box"))
-    txt = conn.read(43)
-    if not sodium_memcmp(box.decrypt(txt), b"box"):
-        raise BadHandshake
+    Ab = crypto_scalarmult(
+        server_priv.encode(),
+        client_id.pub.to_curve25519_public_key().encode(),
+    )
 
-    return box
+    sbox = SecretBox(sha256(ab + aB + Ab))
+    msg = sbox.encrypt(
+        server_id.priv.sign(sig + client_id.pub.encode() + sha256(ab)).signature,
+        nonce=bytes(24),
+    )
+    conn.write(msg.ciphertext)
+
+    return (
+        client_id,
+        BoxStream(
+            SecretBox(sha256(ab + aB + Ab)),
+            send_nonce=client_pub.encode()[:24],
+            recv_nonce=server_priv.public_key.encode()[:24],
+            conn=conn,
+        )
+    )

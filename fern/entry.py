@@ -18,19 +18,17 @@ def build_entry(author: LocalIdentity,
                 timestamp: int,
                 type: str,
                 data: Union[dict, bytes]):
-    if isinstance(data, bytes):
-        data = base64.b64encode(data).decode('ascii')
     d = {
         "prev":      previous,
         "seq":       sequence,
         "author":    str(author),
         "timestamp": timestamp,
         "type":      type,
-        "data":      data,
+        "data":      Entry.encode_data(data),
     }
-    b = canonical_encode_json(d).encode('ascii')
+    b = canonical_encode_json(d).encode('utf-8')
     d["sig"] = author.sign(b)
-    id = sha256(canonical_encode_json(d).encode('ascii'),
+    id = sha256(canonical_encode_json(d).encode('utf-8'),
                 encoder=Base64Encoder)
     return Entry(
         id=f'%{id.decode("ascii")}',
@@ -55,10 +53,17 @@ class Entry:
     data: Union[bytes, dict]
     signature: str
 
-    def encode_data(self):
-        return (base64.b64encode(self.data).decode('ascii')
-                if isinstance(self.data, bytes)
-                else self.data)
+    @staticmethod
+    def decode_data(data: Union[dict, str]):
+        return (base64.b64decode(data)
+                if isinstance(data, str)
+                else data)
+
+    @staticmethod
+    def encode_data(data: Union[dict, bytes]):
+        return (base64.b64encode(data).decode('ascii')
+                if isinstance(data, bytes)
+                else data)
 
     def to_json(self):
         return {
@@ -67,7 +72,7 @@ class Entry:
             "author":   str(self.author),
             "timestamp": self.timestamp,
             "type": self.type,
-            "data": self.encode_data(),
+            "data": self.encode_data(self.data),
             "sig": self.signature,
         }
 
@@ -77,24 +82,17 @@ class Entry:
                     encoder=Base64Encoder)
         return Entry(
             id=f'%{id.decode("ascii")}',
-            previous=(
-                None if data["prev"] is None
-                else data["prev"]
-            ),
+            previous=data["prev"],
             author=Identity.from_id(data["author"]),
             sequence=data["seq"],
             timestamp=data["timestamp"],
             type=data["type"],
-            data=(
-                base64.b64decode(data["data"])
-                if isinstance(data["data"], str)
-                else data["data"]
-            ),
+            data=Entry.decode_data(data["data"]),
             signature=data["sig"],
         )
 
     def verify(self):
         d = self.to_json()
         sig = d.pop('sig')
-        msg = canonical_encode_json(d).encode('ascii')
+        msg = canonical_encode_json(d).encode('utf-8')
         return self.author.verify(msg, sig)
