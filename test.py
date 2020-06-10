@@ -10,12 +10,12 @@ server_id = LocalIdentity.generate()
 
 
 class SockFile:
-    def __init__(self, reader, writer):
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         self.r = reader
         self.w = writer
 
     async def read(self, n):
-        return await self.r.read(n)
+        return await self.r.readexactly(n)
 
     async def write(self, b):
         self.w.write(b)
