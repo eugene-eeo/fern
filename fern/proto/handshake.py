@@ -46,15 +46,16 @@ def client_handshake(
         server_pub.encode(),
     )
 
+    sbox = SecretBox(sha256(ab + aB + Ab))
     server_sig = conn.read(80)
-    server_sig = SecretBox(sha256(ab + aB + Ab)).decrypt(server_sig, nonce=bytes(24))
+    server_sig = sbox.decrypt(server_sig, nonce=bytes(24))
     server_id.pub.verify(
         smessage=sig + client_id.pub.encode() + sha256(ab),
         signature=server_sig,
     )
 
     return BoxStream(
-        SecretBox(sha256(ab + aB + Ab)),
+        sbox,
         send_nonce=server_pub.encode()[:24],
         recv_nonce=client_priv.public_key.encode()[:24],
         conn=conn,
@@ -71,7 +72,7 @@ def server_handshake(
     client_pub = PublicKey(conn.read(32))
 
     # Send our eph pubkey
-    conn.write(server_priv.public_key.encode())
+    conn.write(server_priv.public_key.encode())  # 32 bytes
 
     ab = crypto_scalarmult(server_priv.encode(), client_pub.encode())
     aB = crypto_scalarmult(server_id.priv.to_curve25519_private_key().encode(), client_pub.encode())
@@ -97,12 +98,12 @@ def server_handshake(
         server_id.priv.sign(sig + client_id.pub.encode() + sha256(ab)).signature,
         nonce=bytes(24),
     )
-    conn.write(msg.ciphertext)
+    conn.write(msg.ciphertext)  # 80 bytes
 
     return (
         client_id,
         BoxStream(
-            SecretBox(sha256(ab + aB + Ab)),
+            sbox,
             send_nonce=client_pub.encode()[:24],
             recv_nonce=server_priv.public_key.encode()[:24],
             conn=conn,
