@@ -1,6 +1,6 @@
 import base64
 import dataclasses
-import json
+import orjson
 from typing import Union
 
 from nacl.hash import sha256
@@ -8,8 +8,8 @@ from nacl.encoding import Base64Encoder
 from fern.identity import Identity, LocalIdentity
 
 
-def canonical_encode_json(data):
-    return json.dumps(data, indent=2, sort_keys=True)
+def canonical_encode_json(data) -> bytes:
+    return orjson.dumps(data, option=orjson.OPT_SORT_KEYS)
 
 
 def build_entry(author: LocalIdentity,
@@ -26,10 +26,9 @@ def build_entry(author: LocalIdentity,
         "type":      type,
         "data":      Entry.encode_data(data),
     }
-    b = canonical_encode_json(d).encode('utf-8')
+    b = canonical_encode_json(d)
     d["sig"] = author.sign(b)
-    id = sha256(canonical_encode_json(d).encode('utf-8'),
-                encoder=Base64Encoder)
+    id = sha256(canonical_encode_json(d), encoder=Base64Encoder)
     return Entry(
         id=f'%{id.decode("ascii")}',
         previous=previous,
@@ -78,8 +77,7 @@ class Entry:
 
     @staticmethod
     def from_json(data):
-        id = sha256(canonical_encode_json(data).encode('ascii'),
-                    encoder=Base64Encoder)
+        id = sha256(canonical_encode_json(data), encoder=Base64Encoder)
         return Entry(
             id=f'%{id.decode("ascii")}',
             previous=data["prev"],
@@ -91,8 +89,14 @@ class Entry:
             signature=data["sig"],
         )
 
-    def verify(self):
+    def verify(self, author: Union[None, Identity] = None):
         d = self.to_json()
         sig = d.pop('sig')
-        msg = canonical_encode_json(d).encode('utf-8')
+        msg = canonical_encode_json(d)
+
+        # Check signature against predefined author
+        if author is not None:
+            if not author.verify(msg, sig):
+                return False
+
         return self.author.verify(msg, sig)

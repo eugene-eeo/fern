@@ -1,6 +1,7 @@
-import json
+import orjson
 from collections import namedtuple
 from nacl.secret import SecretBox
+from fern.proto.utils import ProtocolError
 
 
 MAX = 2**(24 * 8) - 1
@@ -23,6 +24,14 @@ class BoxStream:
         self.recv_nonce = recv_nonce
         self.buf = b''
 
+    def increment_send(self):
+        self.send_nonce = increment(self.send_nonce)
+        return self.send_nonce
+
+    def increment_recv(self):
+        self.recv_nonce = increment(self.recv_nonce)
+        return self.recv_nonce
+
     async def write(self, b: bytes):
         n = len(b)
         b = memoryview(b)
@@ -31,24 +40,21 @@ class BoxStream:
             # 2 byte header for length
             head = m.to_bytes(2, byteorder='big')
             body = b[:m]
-            self.send_nonce = increment(self.send_nonce)
-            shead = self.sbox.encrypt(head, nonce=self.send_nonce)
-            self.send_nonce = increment(self.send_nonce)
-            sbody = self.sbox.encrypt(body, nonce=self.send_nonce)
+            shead = self.sbox.encrypt(head, nonce=self.increment_send())
+            sbody = self.sbox.encrypt(body, nonce=self.increment_send())
             await self.conn.write(shead.ciphertext + sbody.ciphertext)
             n -= m
             b = b[m:]
 
     async def next_frame(self):
-        self.recv_nonce = increment(self.recv_nonce)
         header = self.sbox.decrypt(
             await self.conn.read(18),
-            nonce=self.recv_nonce,
+            nonce=self.increment_recv(),
         )
-        self.recv_nonce = increment(self.recv_nonce)
+        length = int.from_bytes(header, byteorder='big')
         return self.sbox.decrypt(
-            await self.conn.read(16 + int.from_bytes(header, byteorder='big')),
-            nonce=self.recv_nonce,
+            await self.conn.read(16 + length),
+            nonce=self.increment_recv(),
         )
 
     async def read(self, n):
@@ -60,42 +66,44 @@ class BoxStream:
         return b
 
 
-STREAM_FLAG = 0b00000001  # noqa: E221
-EOS_FLAG = 0b00000010  # noqa: E221
-ERROR_FLAG = 0b00000100  # noqa: E221
-ALIVE_FLAG = 0b10000000  # noqa: E221
+FLAG_JSON = 0b00001000
+FLAG_STREAM = 0b00000100
+FLAG_ERR = 0b00000010
+FLAG_EOS = 0b00000001
 
 
-RPCFrame = namedtuple('RPCFrame', ['alive', 'request_id', 'data',
-                                   'is_error', 'is_stream', 'end_of_stream'])
-GOODBYE_FRAME = RPCFrame(alive=False, request_id=None, data=None,
-                         is_error=False, is_stream=False, end_of_stream=False)
+RPCFrame = namedtuple('RPCFrame', ('alive', 'request_id', 'data', 'is_error', 'is_eos', 'is_stream'))
+GOODBYE_FRAME = RPCFrame(alive=False, request_id=None, data=None, is_error=False, is_eos=False, is_stream=False)
 
 
 class RPCStream:
-    def __init__(self, conn: BoxStream):
+    def __init__(self, conn):
         self.conn = conn
 
     async def goodbye(self):
         await self.conn.write((0).to_bytes(9, byteorder="big"))
 
     async def send(self,
-                   obj: object,
                    request_id: int,
+                   data: object,
                    is_error: bool = False,
-                   is_stream: bool = False,
-                   end_of_stream: bool = False):
+                   is_eos: bool = False,
+                   is_stream: bool = False):
+
+        is_json = False
+        if not isinstance(data, bytes):
+            is_json = True
+            data = orjson.dumps(data)
+
+        if len(data) > 2**32 - 1:
+            raise ProtocolError("length is too long")
 
         flags = 0
-        flags |= ALIVE_FLAG
-        if is_error:
-            flags |= ERROR_FLAG
-        if is_stream:
-            flags |= STREAM_FLAG
-            if end_of_stream:
-                flags |= EOS_FLAG
+        flags |= FLAG_ERR if is_error else 0
+        flags |= FLAG_EOS if is_error else 0
+        flags |= FLAG_JSON if is_json else 0
+        flags |= FLAG_STREAM if is_stream else 0
 
-        data = json.dumps(obj, indent=None).encode('utf-8')
         header = (
             flags.to_bytes(1, byteorder="big") +
             len(data).to_bytes(4, byteorder="big") +
@@ -107,20 +115,18 @@ class RPCStream:
     async def next(self):
         header = await self.conn.read(9)
         flags = header[0]
-        if not flags & ALIVE_FLAG:
-            return GOODBYE_FRAME
-
         length = int.from_bytes(header[1:5], byteorder="big")
         req_id = int.from_bytes(header[5:], byteorder="big")
 
-        data = await self.conn.read(length)
-        data = json.loads(data.decode('utf-8'))
+        if length == 0:
+            return GOODBYE_FRAME
 
-        return RPCFrame(
-            alive=True,
-            request_id=req_id,
-            data=data,
-            is_error=bool(flags & ERROR_FLAG),
-            is_stream=bool(flags & STREAM_FLAG),
-            end_of_stream=bool(flags & EOS_FLAG),
-        )
+        data = await self.conn.read(length)
+        data = orjson.loads(data) if flags & FLAG_JSON else data
+
+        return RPCFrame(alive=True,
+                        request_id=req_id,
+                        data=data,
+                        is_error=bool(flags & FLAG_ERR),
+                        is_stream=bool(flags & FLAG_STREAM),
+                        is_eos=bool(flags & FLAG_EOS))

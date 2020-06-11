@@ -21,7 +21,7 @@ async def client(server_started):
         conn=Connection(reader, writer),
     )
     rpc = RPCStream(box)
-    await rpc.send({"hello": "world"}, 1)
+    await rpc.send(1, {"hello": "world"})
     print(await rpc.next())
 
 
@@ -32,7 +32,7 @@ async def server(cond):
             conn=Connection(reader, writer),
         )
         rpc = RPCStream(box)
-        await rpc.send({"response": "1"}, 1)
+        await rpc.send(1, {"response": "1"})
         print(await rpc.next())
         writer.close()
         asyncio.get_event_loop().stop()
