@@ -28,7 +28,12 @@ def build_entry(author: LocalIdentity,
     }
     b = canonical_encode_json(d)
     d["sig"] = author.sign(b)
-    id = sha256(canonical_encode_json(d), encoder=Base64Encoder)
+
+    b = canonical_encode_json(d)
+    if len(b) >= 1024 * 4096:
+        raise ValueError("log entry cannot exceed 4mb")
+
+    id = sha256(b, encoder=Base64Encoder)
     return Entry(
         id=f'%{id.decode("ascii")}',
         previous=previous,
@@ -60,6 +65,8 @@ class Entry:
 
     @staticmethod
     def encode_data(data: Union[dict, bytes]):
+        if isinstance(data, str):
+            data = data.encode('utf-8')
         return (base64.b64encode(data).decode('ascii')
                 if isinstance(data, bytes)
                 else data)

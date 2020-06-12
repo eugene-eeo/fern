@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""
+usage:
+    fern-client -h | --help
+    fern-client <name> <args> [--addr=<addr>]
+
+options:
+    -h --help      show this screen.
+    --addr=<addr>  address to connect to. [default: localhost:9110]
+"""
+
+import sys
+import asyncio
+import pprint
+import json
+
+import docopt
+
+from fern.proto.rpc import decode_frame, Request, StreamContent
+from fern.proto.stream import RPCStream
+from fern.proto.utils import Connection
+
+
+async def main():
+    args = docopt.docopt(__doc__)
+    host, port = args['--addr'].split(':')
+    r = Request(
+        id=1,
+        name=args['<name>'],
+        args=json.loads(args['<args>']),
+    )
+    reader, writer = await asyncio.open_connection(host=host, port=port)
+    with Connection(reader, writer) as conn:
+        rpc_stream = RPCStream(conn)
+        await r.send(rpc_stream)
+
+        cont = True
+        code = 0
+        while cont:
+            frame = await rpc_stream.next()
+            item = decode_frame(frame, is_server=False)
+            cont = False
+            if isinstance(item, StreamContent):
+                cont = not item.is_eos
+
+            # item type: Response
+            if not isinstance(item.content, bytes):
+                pprint.pprint(item.content)
+            else:
+                sys.stdout.write(item.content)
+                sys.stdout.write(b"")
+            if item.is_error:
+                code = 1
+                break
+
+        await rpc_stream.goodbye()
+        exit(code)
+
+if __name__ == '__main__':
+    asyncio.run(main())

@@ -22,5 +22,17 @@ class Connection:
         self.w.close()
 
 
+class Deadline:
+    def __init__(self, conn, timeout=2):
+        self.conn = conn
+        self.timeout = timeout
+
+    async def read(self, n):
+        return await asyncio.wait_for(self.conn.read(n), self.timeout)
+
+    async def write(self, b):
+        await asyncio.wait_for(self.conn.write(b), self.timeout)
+
+
 class ProtocolError(Exception):
     pass

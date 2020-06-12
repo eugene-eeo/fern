@@ -100,7 +100,7 @@ class RPCStream:
 
         flags = 0
         flags |= FLAG_ERR if is_error else 0
-        flags |= FLAG_EOS if is_error else 0
+        flags |= FLAG_EOS if is_eos else 0
         flags |= FLAG_JSON if is_json else 0
         flags |= FLAG_STREAM if is_stream else 0
 
@@ -112,7 +112,7 @@ class RPCStream:
         # header is 9 bytes
         await self.conn.write(header + data)
 
-    async def next(self):
+    async def next(self) -> RPCFrame:
         header = await self.conn.read(9)
         flags = header[0]
         length = int.from_bytes(header[1:5], byteorder="big")
